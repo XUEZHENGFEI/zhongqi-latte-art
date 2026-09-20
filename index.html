@@ -161,6 +161,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .store-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); border-left-color: var(--primary); }
 .store-card .store-name { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 8px; line-height: 1.4; word-break: break-all; }
+.store-card .store-name.lvl-0 { color: #dc2626; font-weight: 700; }
+.store-card .store-name.lvl-1 { color: #ea580c; font-weight: 700; }
+.store-card .store-name.lvl-2 { color: var(--green); font-weight: 700; }
 .store-card .store-stats {
   display: flex; gap: 6px; font-size: 12px;
 }
@@ -390,16 +393,19 @@ table.people .approver {
       $content.innerHTML = '<div class="empty">该区域暂无门店数据</div>';
       return;
     }
-    const html = '<div class="store-grid">' + stores.map(s => `
+    const html = '<div class="store-grid">' + stores.map(s => {
+      const lvl = s.passed === 0 ? 'lvl-0' : (s.passed === 1 ? 'lvl-1' : 'lvl-2');
+      const lvlLabel = s.passed === 0 ? '全员未通过' : (s.passed === 1 ? '1 人通过' : `${s.passed} 人通过`);
+      return `
       <div class="store-card" data-store="${s.name.replace(/"/g, '&quot;')}">
-        <div class="store-name">${s.name}</div>
+        <div class="store-name ${lvl}" title="${lvlLabel}">${s.name}</div>
         <div class="store-stats">
           <div class="ss-cell passed"><div class="n">${s.passed}</div><div class="l">通过</div></div>
           <div class="ss-cell failed"><div class="n">${s.failed}</div><div class="l">未通过</div></div>
           <div class="ss-cell pending"><div class="n">${s.pending}</div><div class="l">待处理</div></div>
         </div>
       </div>
-    `).join('') + '</div>';
+    `;}).join('') + '</div>';
     $content.innerHTML = html;
     $content.querySelectorAll('.store-card').forEach(card => {
       card.onclick = () => { STATE.store = card.dataset.store; refreshAll(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
