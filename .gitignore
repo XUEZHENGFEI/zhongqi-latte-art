@@ -1,0 +1,23 @@
+# 凭据 / 密钥
+*.key
+*.pem
+.env
+.env.local
+
+# 原始运营数据（绝对不入库）
+*.xlsx
+data/raw/
+*.csv
+
+# 系统 / 临时文件
+Thumbs.db
+.DS_Store
+__pycache__/
+*.log
+~$*
+
+# 构建/打包产物
+dist/
+build/
+*.zip
+*.tar.gz
