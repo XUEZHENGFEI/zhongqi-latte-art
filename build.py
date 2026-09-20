@@ -13,11 +13,14 @@ OUT = r"C:\Users\kxue\WorkBuddy\Kirin文件夹\中秋拉花看板.html"
 wb = openpyxl.load_workbook(SRC, data_only=True)
 s = wb.worksheets[0]
 
-COL_DEPT = 5
+# 用户清理邮箱后列号变化：
+# 原 28 列（含 col 3=姓名邮箱、col 4=邮箱、col 17/20/23/26 审批人姓名邮箱）
+# 现 26 列 → 所属部门=3, 职务=4, 职位=5, 作业状态=9, 审批人姓名邮箱=15/18/21/24
+COL_DEPT = 3
 COL_NAME = 2
-COL_POS = 7
-COL_STATUS = 11
-COL_APPROVER = [17, 20, 23, 26]
+COL_POS = 5
+COL_STATUS = 9
+COL_APPROVER = [15, 18, 21, 24]
 
 # ---------- 2. 区域映射 ----------
 # 用户指定：江苏+合肥（含淮安 HA）= 1 卡；上海 = 1 卡；浙江 = 1 卡
@@ -636,7 +639,13 @@ final_html = HTML.replace('__DATA_JSON__', DATA_JSON)
 with open(OUT, 'w', encoding='utf-8') as f:
     f.write(final_html)
 
+# 同时复制到部署目录（Cloudflare Pages）
+import shutil
+DEPLOY_INDEX = r"C:\Users\kxue\WorkBuddy\Kirin文件夹\latte-art-zhongqi\index.html"
+shutil.copy2(OUT, DEPLOY_INDEX)
+
 print("✓ HTML 生成成功：", OUT)
+print("✓ 同步到部署目录：", DEPLOY_INDEX)
 print("  大小：", len(final_html), "bytes")
 print("  区域数：", len(out_data['groups']))
 total_persons = 0
