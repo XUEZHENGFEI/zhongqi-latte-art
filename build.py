@@ -79,7 +79,7 @@ CITY_META = {
     'JN':  {'name': '济南',     'tagline': 'JN'},
     # 东区
     'SH':  {'name': '上海',     'tagline': 'SH'},
-    'SHP': {'name': '上海Pop',  'tagline': 'SHP'},
+    'SHP': {'name': '杭州Pop',  'tagline': 'SHP'},
     'SHL': {'name': '上海岚',   'tagline': 'SHL'},
     'NJ':  {'name': '南京',     'tagline': 'NJ'},
     'SZ':  {'name': '苏州',     'tagline': 'SZ'},
@@ -122,14 +122,14 @@ EAST_SUB_REGIONS = [
         'id': 'shanghai',
         'name': '上海',
         'tagline': '上海 + 桐乡 + 嘉兴',
-        'prefixes': ['SH', 'SHP', 'SHL', 'JX'],
+        'prefixes': ['SH', 'SHL', 'JX'],
         'icon': '沪',
     },
     {
         'id': 'zhejiang',
         'name': '浙江',
-        'tagline': '浙江',
-        'prefixes': ['HZ', 'NB', 'JH', 'SX', 'WZ', 'TZ'],
+        'tagline': '浙江 + 杭州 Pop',
+        'prefixes': ['HZ', 'NB', 'JH', 'SX', 'WZ', 'TZ', 'SHP'],
         'icon': '浙',
     },
 ]
@@ -141,9 +141,8 @@ BLACKLIST_STORES = {'SHL01-上海始祖鸟会德丰咖啡店-联营', 'SH087-Rof
 BLACKLIST_PREFIXES = {'BJP'}
 
 # 精确门店 sub_region 重定向（v10 新增）
-# SHP02 是杭州大厦中岛，地理上属浙江；TZ001 是泰州万象城，属江苏
+# TZ001 是泰州万象城，属江苏（SHP02 已通过 EAST_SUB_REGIONS 默认归到浙江，不再需要重定向）
 STORE_SUB_REGION_OVERRIDE = {
-    'SHP02-杭州大厦中岛台pop up': 'zhejiang',  # 杭州属浙江
     'TZ001-泰州万象城店': 'jiangsu',             # 泰州属江苏
 }
 
