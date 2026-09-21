@@ -107,6 +107,36 @@ TAB_CITIES = {
 }
 TAB_ORDER = ['north', 'east']
 
+# 东区子区域划分（v8 新增）
+# 用户原话：江苏=江苏+合肥、上海=上海+桐乡+嘉兴、浙江
+# 桐乡门店实际是 JX003-嘉兴桐乡万象汇，嘉兴/桐乡都归到 JX 前缀
+EAST_SUB_REGIONS = [
+    {
+        'id': 'jiangsu',
+        'name': '江苏',
+        'tagline': '江苏 + 合肥',
+        'prefixes': ['NJ', 'SZ', 'WX', 'CZ', 'NT', 'YZ', 'KS', 'ZJG', 'HA', 'HF'],
+        'icon': '苏',
+    },
+    {
+        'id': 'shanghai',
+        'name': '上海',
+        'tagline': '上海 + 桐乡 + 嘉兴',
+        'prefixes': ['SH', 'SHP', 'SHL', 'JX'],
+        'icon': '沪',
+    },
+    {
+        'id': 'zhejiang',
+        'name': '浙江',
+        'tagline': '浙江',
+        'prefixes': ['HZ', 'NB', 'JH', 'SX', 'WZ', 'TZ'],
+        'icon': '浙',
+    },
+]
+
+# 门店黑名单（剔除）
+BLACKLIST_STORES = {'SHL01-上海始祖鸟会德丰咖啡店-联营', 'SH087-Roffee会议咖啡店'}
+
 records = []
 for src in SRC_FILES:
     wb = openpyxl.load_workbook(src['path'], data_only=True)
@@ -117,6 +147,9 @@ for src in SRC_FILES:
     for r in range(3, s.max_row + 1):
         dept = s.cell(row=r, column=COL_DEPT).value
         if not dept:
+            continue
+        # 门店黑名单过滤
+        if dept in BLACKLIST_STORES:
             continue
         m = re.match(r'^([A-Z]+)(\d+)', dept)
         if not m:
@@ -130,6 +163,13 @@ for src in SRC_FILES:
                 break
         if not tab:
             continue
+        # 东区下，确定属于哪个 sub_region
+        sub_region = None
+        if tab == 'east':
+            for sr in EAST_SUB_REGIONS:
+                if prefix in sr['prefixes']:
+                    sub_region = sr['id']
+                    break
         name = s.cell(row=r, column=COL_NAME).value
         position = s.cell(row=r, column=COL_POS).value
         # 用户指定：只保留 门店副经理 / 咖啡师 / 门店经理 / 值班经理 四个职级
@@ -145,6 +185,7 @@ for src in SRC_FILES:
         store = dept
         records.append({
             'tab': tab,
+            'sub_region': sub_region,
             'prefix': prefix,
             'city': CITY_META.get(prefix, {}).get('name', prefix),
             'store': store,
@@ -187,7 +228,54 @@ tab_meta = {
     'east':  {'name': '东区', 'tagline': '上海 · 江苏 · 合肥 · 浙江', 'icon': '东'},
 }
 
-# 输出 JSON
+# ---------- 6. 组装最终 JSON ----------
+
+# 6.1 计算东区 sub_region 汇总（v8）
+sub_region_agg = {sr['id']: {'passed':0, 'failed':0, 'pending':0, 'city_count':0, 'store_count':0, 'prefixes': []} for sr in EAST_SUB_REGIONS}
+for rec in records:
+    if rec['tab'] != 'east' or not rec['sub_region']:
+        continue
+    sr = sub_region_agg[rec['sub_region']]
+    if rec['pass'] == 'passed': sr['passed'] += 1
+    elif rec['pass'] == 'failed': sr['failed'] += 1
+    else: sr['pending'] += 1
+
+for sr in EAST_SUB_REGIONS:
+    sr_id = sr['id']
+    city_keys = {f"east|{p}" for p in sr['prefixes']}
+    sub_region_agg[sr_id]['city_count'] = sum(1 for ck in city_keys if ck in agg)
+    sub_region_agg[sr_id]['store_count'] = sum(len(agg[ck]) for ck in city_keys if ck in agg)
+    sub_region_agg[sr_id]['prefixes'] = sorted(sr['prefixes'])
+
+# 6.2 构造 cities 字典
+def _build_city(tab_id, prefix, v):
+    return {
+        'tab': tab_id,
+        'prefix': prefix,
+        'name': CITY_META.get(prefix, {}).get('name', prefix),
+        'tagline': CITY_META.get(prefix, {}).get('tagline', prefix),
+        'passed': sum(s['passed'] for s in v.values()),
+        'failed': sum(s['failed'] for s in v.values()),
+        'pending': sum(s['pending'] for s in v.values()),
+        'stores': [
+            {
+                'name': store,
+                'passed': sv['passed'],
+                'failed': sv['failed'],
+                'pending': sv['pending'],
+                'persons': [
+                    {
+                        'name': p['name'],
+                        'position': p['position'] or '—',
+                        'statusLabel': p['statusLabel'],
+                        'pass': p['pass'],
+                        'approvers': p['approvers'],
+                    } for p in sv['persons']
+                ]
+            } for store, sv in v.items()
+        ]
+    }
+
 out_data = {
     'tabs': [{'id': tid, 'name': tab_meta[tid]['name']} for tid in TAB_ORDER],
     'tab_meta': tab_meta,
@@ -195,37 +283,16 @@ out_data = {
         tid: sorted([p for p in TAB_CITIES[tid]], key=lambda x: (CITY_META.get(x, {}).get('name', x), x))
             for tid in TAB_ORDER
         },
+    'east_sub_regions': [
+        {**sr, 'passed': sub_region_agg[sr['id']]['passed'],
+         'failed': sub_region_agg[sr['id']]['failed'],
+         'pending': sub_region_agg[sr['id']]['pending'],
+         'city_count': sub_region_agg[sr['id']]['city_count'],
+         'store_count': sub_region_agg[sr['id']]['store_count']}
+        for sr in EAST_SUB_REGIONS
+    ],
     'city_meta': CITY_META,
-    'cities': {
-        # city_key → {tab, prefix, city_name, passed, failed, pending, stores[]}
-        ck: (lambda tab_id, prefix, v: {
-            'tab': tab_id,
-            'prefix': prefix,
-            'name': CITY_META.get(prefix, {}).get('name', prefix),
-            'tagline': CITY_META.get(prefix, {}).get('tagline', prefix),
-            'passed': sum(s['passed'] for s in v.values()),
-            'failed': sum(s['failed'] for s in v.values()),
-            'pending': sum(s['pending'] for s in v.values()),
-            'stores': [
-                {
-                    'name': store,
-                    'passed': sv['passed'],
-                    'failed': sv['failed'],
-                    'pending': sv['pending'],
-                    'persons': [
-                        {
-                            'name': p['name'],
-                            'position': p['position'] or '—',
-                            'statusLabel': p['statusLabel'],
-                            'pass': p['pass'],
-                            'approvers': p['approvers'],
-                        } for p in sv['persons']
-                    ]
-                } for store, sv in v.items()
-            ]
-        })(*ck.split('|'), v)
-        for ck, v in agg.items()
-    }
+    'cities': {ck: _build_city(*ck.split('|'), v) for ck, v in agg.items()},
 }
 
 DATA_JSON = json.dumps(out_data, ensure_ascii=False, separators=(',', ':'))
@@ -562,7 +629,7 @@ table.people .approver {
 <script>
 (function () {
   const DATA = JSON.parse(document.getElementById('data').textContent);
-  const STATE = { tab: DATA.tabs[0].id, city: null, store: null };
+  const STATE = { tab: DATA.tabs[0].id, sub_region: null, city: null, store: null };
 
   const $tabBar = document.getElementById('tabBar');
   const $bc = document.getElementById('breadcrumb');
@@ -604,7 +671,7 @@ table.people .approver {
     $tabBar.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => {
         if (STATE.tab === btn.dataset.tab) return;
-        STATE.tab = btn.dataset.tab; STATE.city = null; STATE.store = null;
+        STATE.tab = btn.dataset.tab; STATE.sub_region = null; STATE.city = null; STATE.store = null;
         refreshAll();
       };
     });
@@ -615,9 +682,18 @@ table.people .approver {
     const parts = [];
     parts.push({
       label: DATA.tab_meta[STATE.tab].name,
-      active: !STATE.city,
-      action: () => { STATE.city = null; STATE.store = null; refreshAll(); }
+      active: !STATE.sub_region && !STATE.city,
+      action: () => { STATE.sub_region = null; STATE.city = null; STATE.store = null; refreshAll(); }
     });
+    // 东区有 sub_region 层级
+    if (STATE.tab === 'east' && STATE.sub_region) {
+      const sr = (DATA.east_sub_regions || []).find(s => s.id === STATE.sub_region);
+      parts.push({
+        label: sr ? sr.name : STATE.sub_region,
+        active: !STATE.city,
+        action: () => { STATE.city = null; STATE.store = null; refreshAll(); }
+      });
+    }
     if (STATE.city) {
       const cityKey = STATE.tab + '|' + STATE.city;
       const cityObj = DATA.cities[cityKey];
@@ -652,6 +728,10 @@ table.people .approver {
       const c = DATA.cities[cityKey];
       return { passed: c.passed, failed: c.failed, pending: c.pending };
     }
+    if (STATE.sub_region && STATE.tab === 'east') {
+      const sr = (DATA.east_sub_regions || []).find(s => s.id === STATE.sub_region);
+      if (sr) return { passed: sr.passed, failed: sr.failed, pending: sr.pending };
+    }
     // tab 总和
     let p=0,f=0,n=0;
     for (const ck of Object.keys(DATA.cities)) {
@@ -666,6 +746,10 @@ table.people .approver {
     if (STATE.city) {
       const cityKey = STATE.tab + '|' + STATE.city;
       return DATA.cities[cityKey].name;
+    }
+    if (STATE.sub_region && STATE.tab === 'east') {
+      const sr = (DATA.east_sub_regions || []).find(s => s.id === STATE.sub_region);
+      return sr ? sr.name : STATE.sub_region;
     }
     return DATA.tab_meta[STATE.tab].name;
   }
@@ -687,20 +771,51 @@ table.people .approver {
 
   // ===== 内容 =====
   function renderContent() {
-    if (!STATE.city) {
-      renderCities();
-    } else if (!STATE.store) {
-      renderStores();
+    if (!STATE.store) {
+      if (STATE.tab === 'east' && !STATE.sub_region) {
+        renderSubRegions();
+      } else if (!STATE.city) {
+        renderCities();
+      } else {
+        renderStores();
+      }
     } else {
       renderPeople();
     }
   }
 
-  // 一阶：当前 tab 下的城市列表
+  // 一阶-东区：sub_region 列表（江苏/上海/浙江）
+  function renderSubRegions() {
+    const list = DATA.east_sub_regions || [];
+    const html = '<div class="region-grid">' + list.map(sr => `
+        <div class="region-card" data-sr="${sr.id}">
+          <div class="icon">${sr.icon}</div>
+          <div class="name">${sr.name}</div>
+          <div class="tag">${sr.tagline}</div>
+          <div class="stats">
+            <div class="pill passed"><div class="n">${sr.passed}</div><div class="l">已通过</div></div>
+            <div class="pill failed"><div class="n">${sr.failed}</div><div class="l">未通过</div></div>
+            <div class="pill pending"><div class="n">${sr.pending}</div><div class="l">待批/未交</div></div>
+          </div>
+          <div class="hint">${sr.city_count} 个城市 · ${sr.store_count} 家门店 ›</div>
+        </div>
+      `).join('') + '</div>';
+    $content.innerHTML = html;
+    $content.querySelectorAll('.region-card').forEach(card => {
+      card.onclick = () => { STATE.sub_region = card.dataset.sr; refreshAll(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+    });
+  }
+
+  // 二阶：当前 tab+sub_region 下的城市列表
   function renderCities() {
-    const list = Object.values(DATA.cities).filter(c => c.tab === STATE.tab);
+    let list = Object.values(DATA.cities).filter(c => c.tab === STATE.tab);
+    // 东区下，按 sub_region 过滤
+    if (STATE.tab === 'east' && STATE.sub_region) {
+      const sr = (DATA.east_sub_regions || []).find(s => s.id === STATE.sub_region);
+      if (sr) list = list.filter(c => sr.prefixes.includes(c.prefix));
+    }
     if (list.length === 0) {
-      $content.innerHTML = '<div class="empty">该大区暂无城市数据</div>';
+      $content.innerHTML = '<div class="empty">暂无城市数据</div>';
       return;
     }
     const html = '<div class="region-grid">' + list.map(c => `
@@ -718,7 +833,7 @@ table.people .approver {
       `).join('') + '</div>';
     $content.innerHTML = html;
     $content.querySelectorAll('.region-card').forEach(card => {
-      card.onclick = () => { STATE.city = card.dataset.prefix; STATE.store = null; refreshAll(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+      card.onclick = () => { STATE.city = card.dataset.prefix; refreshAll(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
     });
   }
 
