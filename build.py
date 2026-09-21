@@ -140,6 +140,13 @@ BLACKLIST_STORES = {'SHL01-上海始祖鸟会德丰咖啡店-联营', 'SH087-Rof
 # 按门店前缀剔除（v9 新增：所有北京 pop-up 都不抓）
 BLACKLIST_PREFIXES = {'BJP'}
 
+# 精确门店 sub_region 重定向（v10 新增）
+# SHP02 是杭州大厦中岛，地理上属浙江；TZ001 是泰州万象城，属江苏
+STORE_SUB_REGION_OVERRIDE = {
+    'SHP02-杭州大厦中岛台pop up': 'zhejiang',  # 杭州属浙江
+    'TZ001-泰州万象城店': 'jiangsu',             # 泰州属江苏
+}
+
 records = []
 for src in SRC_FILES:
     wb = openpyxl.load_workbook(src['path'], data_only=True)
@@ -169,13 +176,16 @@ for src in SRC_FILES:
                 break
         if not tab:
             continue
-        # 东区下，确定属于哪个 sub_region
+        # 东区下，确定属于哪个 sub_region（精确门店重定向优先）
         sub_region = None
         if tab == 'east':
-            for sr in EAST_SUB_REGIONS:
-                if prefix in sr['prefixes']:
-                    sub_region = sr['id']
-                    break
+            if dept in STORE_SUB_REGION_OVERRIDE:
+                sub_region = STORE_SUB_REGION_OVERRIDE[dept]
+            else:
+                for sr in EAST_SUB_REGIONS:
+                    if prefix in sr['prefixes']:
+                        sub_region = sr['id']
+                        break
         name = s.cell(row=r, column=COL_NAME).value
         position = s.cell(row=r, column=COL_POS).value
         # 用户指定：只保留 门店副经理 / 咖啡师 / 门店经理 / 值班经理 四个职级
