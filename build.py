@@ -97,7 +97,7 @@ CITY_META = {
     'SX':  {'name': '绍兴',     'tagline': 'SX'},
     'WZ':  {'name': '温州',     'tagline': 'WZ'},
     'JX':  {'name': '嘉兴',     'tagline': 'JX'},
-    'TZ':  {'name': '台州',     'tagline': 'TZ'},
+    'TZ':  {'name': '泰州',     'tagline': 'TZ'},
 }
 
 # tab_id → 城市前缀集合（用户确认：北区=北六省，东区=华东）
@@ -114,8 +114,8 @@ EAST_SUB_REGIONS = [
     {
         'id': 'jiangsu',
         'name': '江苏',
-        'tagline': '江苏 + 合肥',
-        'prefixes': ['NJ', 'SZ', 'WX', 'CZ', 'NT', 'YZ', 'KS', 'ZJG', 'HA', 'HF'],
+        'tagline': '江苏 + 合肥 + 泰州',
+        'prefixes': ['NJ', 'SZ', 'WX', 'CZ', 'NT', 'YZ', 'KS', 'ZJG', 'HA', 'HF', 'TZ'],
         'icon': '苏',
     },
     {
@@ -129,7 +129,7 @@ EAST_SUB_REGIONS = [
         'id': 'zhejiang',
         'name': '浙江',
         'tagline': '浙江 + 杭州 Pop',
-        'prefixes': ['HZ', 'NB', 'JH', 'SX', 'WZ', 'TZ', 'SHP'],
+        'prefixes': ['HZ', 'NB', 'JH', 'SX', 'WZ', 'SHP'],
         'icon': '浙',
     },
 ]
@@ -140,11 +140,9 @@ BLACKLIST_STORES = {'SHL01-上海始祖鸟会德丰咖啡店-联营', 'SH087-Rof
 # 按门店前缀剔除（v9 新增：所有北京 pop-up 都不抓）
 BLACKLIST_PREFIXES = {'BJP'}
 
-# 精确门店 sub_region 重定向（v10 新增）
-# TZ001 是泰州万象城，属江苏（SHP02 已通过 EAST_SUB_REGIONS 默认归到浙江，不再需要重定向）
-STORE_SUB_REGION_OVERRIDE = {
-    'TZ001-泰州万象城店': 'jiangsu',             # 泰州属江苏
-}
+# 精确门店 sub_region 重定向
+# 当前不需要单店重定向：SHP02 通过 EAST_SUB_REGIONS.shanghai 移除了 SHP、TZ 通过 EAST_SUB_REGIONS.jiangsu 增加了 TZ
+STORE_SUB_REGION_OVERRIDE = {}
 
 records = []
 for src in SRC_FILES:
