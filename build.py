@@ -137,6 +137,9 @@ EAST_SUB_REGIONS = [
 # 门店黑名单（剔除）
 BLACKLIST_STORES = {'SHL01-上海始祖鸟会德丰咖啡店-联营', 'SH087-Roffee会议咖啡店'}
 
+# 按门店前缀剔除（v9 新增：所有北京 pop-up 都不抓）
+BLACKLIST_PREFIXES = {'BJP'}
+
 records = []
 for src in SRC_FILES:
     wb = openpyxl.load_workbook(src['path'], data_only=True)
@@ -148,11 +151,14 @@ for src in SRC_FILES:
         dept = s.cell(row=r, column=COL_DEPT).value
         if not dept:
             continue
-        # 门店黑名单过滤
+        # 门店黑名单过滤（精确名称）
         if dept in BLACKLIST_STORES:
             continue
-        m = re.match(r'^([A-Z]+)(\d+)', dept)
+        # 前缀黑名单（如 BJP 北京 pop-up 全部剔除）
+        m = re.match(r'^([A-Z]+)\d+', dept)
         if not m:
+            continue
+        if m.group(1) in BLACKLIST_PREFIXES:
             continue
         prefix = m.group(1)
         # 确定属于哪个 tab
