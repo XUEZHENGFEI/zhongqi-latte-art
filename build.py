@@ -1,37 +1,40 @@
 # -*- coding: utf-8 -*-
-"""生成中秋拉花 3 阶数据看板 HTML（数据内嵌、单文件、本地方案）。"""
+"""生成中秋拉花 3 阶数据看板 HTML（数据内嵌、单文件、本地方案）。
+
+v7 改造：北区/东区 顶部 tab 切换，每个 tab 内的城市为一阶。
+两个源文件：
+- 东区文件（28 列）：上海/江苏/合肥/浙江
+- 北区文件（25 列）：北京/沈阳/大连/天津/呼和浩特/济南
+"""
 import openpyxl
 import re
 import json
 import html as H
 from collections import defaultdict
 
-SRC = r"C:\Users\kxue\Desktop\中秋兔子拉花\作业明细数据_20260920170806.xlsx"
+# ---------- 源文件配置 ----------
+SRC_FILES = [
+    {
+        'path': r"C:\Users\kxue\Desktop\中秋兔子拉花\作业明细数据_20260921113052.xlsx",
+        'tab': 'east',
+        'tab_name': '东区',
+    },
+    {
+        'path': r"C:\Users\kxue\Desktop\中秋兔子拉花\作业明细数据_20260921113208.xlsx",
+        'tab': 'north',
+        'tab_name': '北区',
+    },
+]
+
 OUT = r"C:\Users\kxue\WorkBuddy\Kirin文件夹\中秋拉花看板.html"
 
-# ---------- 1. 读取 Excel ----------
-wb = openpyxl.load_workbook(SRC, data_only=True)
-s = wb.worksheets[0]
-
-# 用户清理邮箱后列号变化：
-# 原 28 列（含 col 3=姓名邮箱、col 4=邮箱、col 17/20/23/26 审批人姓名邮箱）
-# 现 26 列 → 所属部门=3, 职务=4, 职位=5, 作业状态=9, 审批人姓名邮箱=15/18/21/24
-COL_DEPT = 3
+# 列号（兼容两种文件结构，都统一到 col 5=所属部门）
+COL_DEPT = 5
 COL_NAME = 2
-COL_POS = 5
-COL_STATUS = 9
-COL_APPROVER = [15, 18, 21, 24]
-
-# ---------- 2. 区域映射 ----------
-# 用户指定：江苏+合肥（含淮安 HA）= 1 卡；上海 = 1 卡；浙江 = 1 卡
-JIANG_SU_HEFEI = {'NJ', 'SZ', 'WX', 'CZ', 'NT', 'YZ', 'KS', 'ZJG', 'HF', 'HA'}
-SHANGHAI = {'SH', 'SHP', 'SHL'}
-ZHEJIANG = {'HZ', 'NB', 'JH', 'SX', 'WZ', 'JX', 'TZ'}
-
-PREFIX_TO_GROUP = {}
-for p in JIANG_SU_HEFEI: PREFIX_TO_GROUP[p] = '江苏+合肥'
-for p in SHANGHAI: PREFIX_TO_GROUP[p] = '上海'
-for p in ZHEJIANG: PREFIX_TO_GROUP[p] = '浙江'
+COL_POS = 7
+COL_STATUS = 11
+# 审批人姓名邮箱可能存在多个：col 17, 20, 23, 26（东区文件）
+COL_APPROVER = [17, 20, 23, 26]
 
 # ---------- 3. 中文名提取 ----------
 def extract_cn_name(raw):
@@ -63,50 +66,103 @@ def pass_status(st):
         return 'failed'
     return 'pending'
 
-# ---------- 4. 提取所有记录 ----------
-records = []
-for r in range(3, s.max_row + 1):
-    dept = s.cell(row=r, column=COL_DEPT).value
-    if not dept:
-        continue
-    m = re.match(r'^([A-Z]+)(\d+)', dept)
-    if not m:
-        continue
-    prefix = m.group(1)
-    group = PREFIX_TO_GROUP.get(prefix)
-    if not group:
-        continue
-    name = s.cell(row=r, column=COL_NAME).value
-    position = s.cell(row=r, column=COL_POS).value
-    # 用户指定：只保留 门店副经理 / 咖啡师 / 门店经理 / 值班经理 四个职级
-    if position not in {'门店副经理', '咖啡师', '门店经理', '值班经理'}:
-        continue
-    status = s.cell(row=r, column=COL_STATUS).value
-    approvers = []
-    for c in COL_APPROVER:
-        raw = s.cell(row=r, column=c).value
-        cn = extract_cn_name(raw)
-        if cn:
-            approvers.append(cn)
-    # 门店全名（去掉前缀编号前缀部分，保留 XX000-门店名 完整形式更友好）
-    store = dept  # 完整保留 "NB005-宁波万象汇店"
-    records.append({
-        'group': group,
-        'store': store,
-        'name': name,
-        'position': position,
-        'status': status,
-        'statusLabel': {'已通过':'通过','未通过':'未通过','待重新提交':'未通过','待批阅':'待批阅','未提交':'未提交'}.get(status, status or '—'),
-        'pass': pass_status(status),
-        'approvers': approvers
-    })
+# ---------- 4. 提取所有记录（多文件循环） ----------
+# 城市元数据：中文名 + 简称
+CITY_META = {
+    # 北区
+    'BJ':  {'name': '北京',     'tagline': 'BJ'},
+    'BJP': {'name': '北京Pop',  'tagline': 'BJP'},
+    'TJ':  {'name': '天津',     'tagline': 'TJ'},
+    'SY':  {'name': '沈阳',     'tagline': 'SY'},
+    'DL':  {'name': '大连',     'tagline': 'DL'},
+    'HT':  {'name': '呼和浩特', 'tagline': 'HT'},
+    'JN':  {'name': '济南',     'tagline': 'JN'},
+    # 东区
+    'SH':  {'name': '上海',     'tagline': 'SH'},
+    'SHP': {'name': '上海Pop',  'tagline': 'SHP'},
+    'SHL': {'name': '上海岚',   'tagline': 'SHL'},
+    'NJ':  {'name': '南京',     'tagline': 'NJ'},
+    'SZ':  {'name': '苏州',     'tagline': 'SZ'},
+    'WX':  {'name': '无锡',     'tagline': 'WX'},
+    'CZ':  {'name': '常州',     'tagline': 'CZ'},
+    'NT':  {'name': '南通',     'tagline': 'NT'},
+    'YZ':  {'name': '扬州',     'tagline': 'YZ'},
+    'KS':  {'name': '昆山',     'tagline': 'KS'},
+    'ZJG': {'name': '张家港',   'tagline': 'ZJG'},
+    'HF':  {'name': '合肥',     'tagline': 'HF'},
+    'HA':  {'name': '淮安',     'tagline': 'HA'},
+    'HZ':  {'name': '杭州',     'tagline': 'HZ'},
+    'NB':  {'name': '宁波',     'tagline': 'NB'},
+    'JH':  {'name': '金华',     'tagline': 'JH'},
+    'SX':  {'name': '绍兴',     'tagline': 'SX'},
+    'WZ':  {'name': '温州',     'tagline': 'WZ'},
+    'JX':  {'name': '嘉兴',     'tagline': 'JX'},
+    'TZ':  {'name': '台州',     'tagline': 'TZ'},
+}
 
-# ---------- 5. 聚合到 3 阶 ----------
-# group -> store -> {passed, failed, pending, persons[]}
+# tab_id → 城市前缀集合（用户确认：北区=北六省，东区=华东）
+TAB_CITIES = {
+    'north': {'BJ', 'BJP', 'TJ', 'SY', 'DL', 'HT', 'JN'},
+    'east':  {'SH', 'SHP', 'SHL', 'NJ', 'SZ', 'WX', 'CZ', 'NT', 'YZ', 'KS', 'ZJG', 'HF', 'HA', 'HZ', 'NB', 'JH', 'SX', 'WZ', 'JX', 'TZ'},
+}
+TAB_ORDER = ['north', 'east']
+
+records = []
+for src in SRC_FILES:
+    wb = openpyxl.load_workbook(src['path'], data_only=True)
+    s = wb.worksheets[0]
+    # 北区文件 25 列少 3 列（无审批人 2/3/4），过滤越界 col
+    max_col = s.max_column
+    approver_cols = [c for c in COL_APPROVER if c <= max_col]
+    for r in range(3, s.max_row + 1):
+        dept = s.cell(row=r, column=COL_DEPT).value
+        if not dept:
+            continue
+        m = re.match(r'^([A-Z]+)(\d+)', dept)
+        if not m:
+            continue
+        prefix = m.group(1)
+        # 确定属于哪个 tab
+        tab = None
+        for tid, cities in TAB_CITIES.items():
+            if prefix in cities:
+                tab = tid
+                break
+        if not tab:
+            continue
+        name = s.cell(row=r, column=COL_NAME).value
+        position = s.cell(row=r, column=COL_POS).value
+        # 用户指定：只保留 门店副经理 / 咖啡师 / 门店经理 / 值班经理 四个职级
+        if position not in {'门店副经理', '咖啡师', '门店经理', '值班经理'}:
+            continue
+        status = s.cell(row=r, column=COL_STATUS).value
+        approvers = []
+        for c in approver_cols:
+            raw = s.cell(row=r, column=c).value
+            cn = extract_cn_name(raw)
+            if cn:
+                approvers.append(cn)
+        store = dept
+        records.append({
+            'tab': tab,
+            'prefix': prefix,
+            'city': CITY_META.get(prefix, {}).get('name', prefix),
+            'store': store,
+            'name': name,
+            'position': position,
+            'status': status,
+            'statusLabel': {'已通过':'通过','未通过':'未通过','待重新提交':'未通过','待批阅':'待批阅','未提交':'未提交'}.get(status, status or '—'),
+            'pass': pass_status(status),
+            'approvers': approvers
+        })
+
+# ---------- 5. 聚合到 3 阶：tab → city → store → persons ----------
+# city_key = tab + prefix
 agg = defaultdict(lambda: defaultdict(lambda: {'passed':0, 'failed':0, 'pending':0, 'persons':[]}))
 
 for rec in records:
-    sa = agg[rec['group']][rec['store']]
+    city_key = f"{rec['tab']}|{rec['prefix']}"
+    sa = agg[city_key][rec['store']]
     if rec['pass'] == 'passed':
         sa['passed'] += 1
     elif rec['pass'] == 'failed':
@@ -122,40 +178,40 @@ def store_sort_key(store):
         return (m.group(1), int(m.group(2)), m.group(3))
     return (store, 0, '')
 
-for g in agg:
-    agg[g] = dict(sorted(agg[g].items(), key=lambda kv: store_sort_key(kv[0])))
+for ck in agg:
+    agg[ck] = dict(sorted(agg[ck].items(), key=lambda kv: store_sort_key(kv[0])))
 
-# 区域元数据
-group_meta = {
-    '江苏+合肥': {
-        'tagline': 'NJ · SZ · WX · CZ · NT · YZ · KS · ZJG · HA · HF',
-        'icon': '江',
-    },
-    '上海': {
-        'tagline': 'SH · SHP · SHL',
-        'icon': '沪',
-    },
-    '浙江': {
-        'tagline': 'HZ · NB · JH · SX · WZ · JX · TZ',
-        'icon': '浙',
-    },
+# tab_meta
+tab_meta = {
+    'north': {'name': '北区', 'tagline': '北京 · 天津 · 沈阳 · 大连 · 呼和浩特 · 济南', 'icon': '北'},
+    'east':  {'name': '东区', 'tagline': '上海 · 江苏 · 合肥 · 浙江', 'icon': '东'},
 }
 
-# 输出 JSON（Python dict 转 JSON）
+# 输出 JSON
 out_data = {
-    'groups': ['江苏+合肥', '上海', '浙江'],
-    'group_meta': group_meta,
-    'agg': {
-        g: {
-            'passed': sum(v['passed'] for v in stores.values()),
-            'failed': sum(v['failed'] for v in stores.values()),
-            'pending': sum(v['pending'] for v in stores.values()),
+    'tabs': [{'id': tid, 'name': tab_meta[tid]['name']} for tid in TAB_ORDER],
+    'tab_meta': tab_meta,
+    'tab_cities': {
+        tid: sorted([p for p in TAB_CITIES[tid]], key=lambda x: (CITY_META.get(x, {}).get('name', x), x))
+            for tid in TAB_ORDER
+        },
+    'city_meta': CITY_META,
+    'cities': {
+        # city_key → {tab, prefix, city_name, passed, failed, pending, stores[]}
+        ck: (lambda tab_id, prefix, v: {
+            'tab': tab_id,
+            'prefix': prefix,
+            'name': CITY_META.get(prefix, {}).get('name', prefix),
+            'tagline': CITY_META.get(prefix, {}).get('tagline', prefix),
+            'passed': sum(s['passed'] for s in v.values()),
+            'failed': sum(s['failed'] for s in v.values()),
+            'pending': sum(s['pending'] for s in v.values()),
             'stores': [
                 {
                     'name': store,
-                    'passed': v['passed'],
-                    'failed': v['failed'],
-                    'pending': v['pending'],
+                    'passed': sv['passed'],
+                    'failed': sv['failed'],
+                    'pending': sv['pending'],
                     'persons': [
                         {
                             'name': p['name'],
@@ -163,11 +219,12 @@ out_data = {
                             'statusLabel': p['statusLabel'],
                             'pass': p['pass'],
                             'approvers': p['approvers'],
-                        } for p in v['persons']
+                        } for p in sv['persons']
                     ]
-                } for store, v in stores.items()
+                } for store, sv in v.items()
             ]
-        } for g, stores in agg.items()
+        })(*ck.split('|'), v)
+        for ck, v in agg.items()
     }
 }
 
@@ -236,6 +293,45 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 /* === 容器 === */
 .container { max-width: 1180px; margin: 0 auto; padding: 18px 18px 40px; }
+
+/* === Tab 切换栏 === */
+.tab-bar {
+  display: flex; gap: 8px;
+  margin-bottom: 14px;
+  background: var(--card);
+  padding: 6px;
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.tab-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 15px; font-weight: 600;
+  transition: background .15s, color .15s, transform .12s;
+}
+.tab-btn:hover { background: var(--primary-soft); color: var(--ink); }
+.tab-btn.active {
+  background: linear-gradient(135deg, #fb923c, #c2410c);
+  color: white;
+  box-shadow: 0 4px 12px rgba(194, 65, 12, .25);
+}
+.tab-btn .tab-name { letter-spacing: 1px; }
+.tab-btn .tab-stats { display: flex; gap: 4px; font-size: 12px; }
+.tab-btn .tab-pill {
+  padding: 2px 6px; border-radius: 5px;
+  font-weight: 600; opacity: .92;
+}
+.tab-btn.active .tab-pill.green { background: rgba(255,255,255,.22); color: #d1fae5; }
+.tab-btn.active .tab-pill.red   { background: rgba(255,255,255,.22); color: #fecaca; }
+.tab-btn.active .tab-pill.gray  { background: rgba(255,255,255,.22); color: #e5e7eb; }
+.tab-btn:not(.active) .tab-pill.green { background: var(--green-bg); color: var(--green); }
+.tab-btn:not(.active) .tab-pill.red   { background: var(--red-bg); color: var(--red); }
+.tab-btn:not(.active) .tab-pill.gray  { background: var(--gray-bg); color: var(--gray); }
 
 /* === 面包屑 === */
 .breadcrumb {
@@ -337,6 +433,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .store-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); border-left-color: var(--primary); }
 .store-card .store-name { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 8px; line-height: 1.4; word-break: break-all; }
+.store-card .store-name.lvl-0 { color: #dc2626; font-weight: 700; }
+.store-card .store-name.lvl-1 { color: #ea580c; font-weight: 700; }
+.store-card .store-name.lvl-2 { color: var(--green); font-weight: 700; }
 .store-card .store-stats {
   display: flex; gap: 6px; font-size: 12px;
 }
@@ -443,10 +542,11 @@ table.people .approver {
     </svg>
     中秋限定拉花 · 作业看板
   </h1>
-  <div class="sub">江苏+合肥 · 上海 · 浙江 · 3 阶点击钻取</div>
+  <div class="sub">北区 · 东区 · 3 阶点击钻取</div>
 </div>
 
 <div class="container">
+  <div class="tab-bar" id="tabBar"></div>
   <div class="breadcrumb" id="breadcrumb"></div>
   <div id="summary"></div>
   <div id="content"></div>
@@ -462,26 +562,71 @@ table.people .approver {
 <script>
 (function () {
   const DATA = JSON.parse(document.getElementById('data').textContent);
-  const STATE = { group: null, store: null };
+  const STATE = { tab: DATA.tabs[0].id, city: null, store: null };
 
+  const $tabBar = document.getElementById('tabBar');
   const $bc = document.getElementById('breadcrumb');
   const $sum = document.getElementById('summary');
   const $content = document.getElementById('content');
 
   // ===== 统一刷新入口（铁律 9：DAG 单向，绝不互调） =====
   function refreshAll() {
+    renderTabs();
     renderBreadcrumb();
     renderSummary();
     renderContent();
   }
 
+  // ===== Tab 切换栏 =====
+  function renderTabs() {
+    const counts = {};
+    for (const t of DATA.tabs) {
+      let p = 0, f = 0, n = 0;
+      for (const ck of Object.keys(DATA.cities)) {
+        const c = DATA.cities[ck];
+        if (c.tab !== t.id) continue;
+        p += c.passed; f += c.failed; n += c.pending;
+      }
+      counts[t.id] = { p, f, n };
+    }
+    $tabBar.innerHTML = DATA.tabs.map(t => {
+      const active = STATE.tab === t.id;
+      const c = counts[t.id];
+      return `<button class="tab-btn ${active ? 'active' : ''}" data-tab="${t.id}">
+        <span class="tab-name">${t.name}</span>
+        <span class="tab-stats">
+          <span class="tab-pill green">${c.p}</span>
+          <span class="tab-pill red">${c.f}</span>
+          <span class="tab-pill gray">${c.n}</span>
+        </span>
+      </button>`;
+    }).join('');
+    $tabBar.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.onclick = () => {
+        if (STATE.tab === btn.dataset.tab) return;
+        STATE.tab = btn.dataset.tab; STATE.city = null; STATE.store = null;
+        refreshAll();
+      };
+    });
+  }
+
   // ===== 面包屑 =====
   function renderBreadcrumb() {
     const parts = [];
-    parts.push({ label: '全部区域', active: !STATE.group, action: () => { STATE.group = null; STATE.store = null; refreshAll(); } });
-    if (STATE.group) {
-      const g = DATA.group_meta[STATE.group];
-      parts.push({ label: STATE.group + ' · ' + g.tagline.split(' · ')[0], active: !STATE.store, action: () => { STATE.store = null; refreshAll(); } });
+    parts.push({
+      label: DATA.tab_meta[STATE.tab].name,
+      active: !STATE.city,
+      action: () => { STATE.city = null; STATE.store = null; refreshAll(); }
+    });
+    if (STATE.city) {
+      const cityKey = STATE.tab + '|' + STATE.city;
+      const cityObj = DATA.cities[cityKey];
+      const cityName = cityObj ? cityObj.name : STATE.city;
+      parts.push({
+        label: cityName,
+        active: !STATE.store,
+        action: () => { STATE.store = null; refreshAll(); }
+      });
     }
     if (STATE.store) {
       parts.push({ label: STATE.store, active: true });
@@ -496,37 +641,54 @@ table.people .approver {
   }
 
   // ===== 摘要 =====
+  function currentScope() {
+    if (STATE.store) {
+      const cityKey = STATE.tab + '|' + STATE.city;
+      const store = DATA.cities[cityKey].stores.find(s => s.name === STATE.store);
+      return { passed: store.passed, failed: store.failed, pending: store.pending };
+    }
+    if (STATE.city) {
+      const cityKey = STATE.tab + '|' + STATE.city;
+      const c = DATA.cities[cityKey];
+      return { passed: c.passed, failed: c.failed, pending: c.pending };
+    }
+    // tab 总和
+    let p=0,f=0,n=0;
+    for (const ck of Object.keys(DATA.cities)) {
+      const c = DATA.cities[ck];
+      if (c.tab !== STATE.tab) continue;
+      p += c.passed; f += c.failed; n += c.pending;
+    }
+    return { passed: p, failed: f, pending: n };
+  }
+  function currentLabel() {
+    if (STATE.store) return STATE.store;
+    if (STATE.city) {
+      const cityKey = STATE.tab + '|' + STATE.city;
+      return DATA.cities[cityKey].name;
+    }
+    return DATA.tab_meta[STATE.tab].name;
+  }
   function renderSummary() {
-    const scope = STATE.group
-      ? (STATE.store
-          ? { passed: DATA.agg[STATE.group].stores.find(s => s.name === STATE.store).passed,
-              failed: DATA.agg[STATE.group].stores.find(s => s.name === STATE.store).failed,
-              pending: DATA.agg[STATE.group].stores.find(s => s.name === STATE.store).pending }
-          : { passed: DATA.agg[STATE.group].passed, failed: DATA.agg[STATE.group].failed, pending: DATA.agg[STATE.group].pending })
-      : {
-          passed: DATA.groups.reduce((s, g) => s + DATA.agg[g].passed, 0),
-          failed: DATA.groups.reduce((s, g) => s + DATA.agg[g].failed, 0),
-          pending: DATA.groups.reduce((s, g) => s + DATA.agg[g].pending, 0),
-        };
-    const total = scope.passed + scope.failed + scope.pending;
-    const rate = total > 0 ? ((scope.passed / total) * 100).toFixed(1) : '—';
-    const scope_label = STATE.store ? STATE.store : (STATE.group ? STATE.group : '全部区域');
+    const s = currentScope();
+    const total = s.passed + s.failed + s.pending;
+    const rate = total > 0 ? ((s.passed / total) * 100).toFixed(1) : '—';
     $sum.innerHTML = `
       <div class="summary">
-        <div class="stat total"><div class="v">${scope.passed + scope.failed + scope.pending}</div><div class="l">${scope_label} · 四类职级总人数</div></div>
-        <div class="stat passed"><div class="v">${scope.passed}</div><div class="l">已通过</div></div>
-        <div class="stat failed"><div class="v">${scope.failed}</div><div class="l">未通过/待重新提交</div></div>
+        <div class="stat total"><div class="v">${total}</div><div class="l">${currentLabel()} · 四类职级总人数</div></div>
+        <div class="stat passed"><div class="v">${s.passed}</div><div class="l">已通过</div></div>
+        <div class="stat failed"><div class="v">${s.failed}</div><div class="l">未通过/待重新提交</div></div>
         <div class="stat"><div class="v" style="color:var(--gold)">${rate}${rate !== '—' ? '%' : ''}</div><div class="l">通过率<br><span style="font-size:10px;color:var(--ink-soft);font-weight:400">已通过 / 四类职级总数</span></div></div>
-        <div class="stat"><div class="v" style="color:var(--gray)">${scope.pending}</div><div class="l">待批阅/未提交</div></div>
-        <div class="hint">点击区域卡片 → 展开门店；点击门店 → 展开人员明细（姓名、职位、通过状态、审批人中文名）。</div>
+        <div class="stat"><div class="v" style="color:var(--gray)">${s.pending}</div><div class="l">待批阅/未提交</div></div>
+        <div class="hint">点击城市卡片 → 展开门店；点击门店 → 展开人员明细（姓名、职位、通过状态、审批人中文名）。</div>
       </div>
     `;
   }
 
   // ===== 内容 =====
   function renderContent() {
-    if (!STATE.group) {
-      renderRegions();
+    if (!STATE.city) {
+      renderCities();
     } else if (!STATE.store) {
       renderStores();
     } else {
@@ -534,62 +696,68 @@ table.people .approver {
     }
   }
 
-  // 一阶：3 个区域
-  function renderRegions() {
-    const html = '<div class="region-grid">' + DATA.groups.map(g => {
-      const a = DATA.agg[g];
-      const m = DATA.group_meta[g];
-      return `
-        <div class="region-card" data-group="${g}">
-          <div class="icon">${m.icon}</div>
-          <div class="name">${g}</div>
-          <div class="tag">${m.tagline}</div>
+  // 一阶：当前 tab 下的城市列表
+  function renderCities() {
+    const list = Object.values(DATA.cities).filter(c => c.tab === STATE.tab);
+    if (list.length === 0) {
+      $content.innerHTML = '<div class="empty">该大区暂无城市数据</div>';
+      return;
+    }
+    const html = '<div class="region-grid">' + list.map(c => `
+        <div class="region-card" data-prefix="${c.prefix}">
+          <div class="icon">${c.tagline}</div>
+          <div class="name">${c.name}</div>
+          <div class="tag">${c.prefix} · ${c.stores.length} 家门店</div>
           <div class="stats">
-            <div class="pill passed"><div class="n">${a.passed}</div><div class="l">已通过</div></div>
-            <div class="pill failed"><div class="n">${a.failed}</div><div class="l">未通过</div></div>
-            <div class="pill pending"><div class="n">${a.pending}</div><div class="l">待批/未交</div></div>
+            <div class="pill passed"><div class="n">${c.passed}</div><div class="l">已通过</div></div>
+            <div class="pill failed"><div class="n">${c.failed}</div><div class="l">未通过</div></div>
+            <div class="pill pending"><div class="n">${c.pending}</div><div class="l">待批/未交</div></div>
           </div>
-          <div class="hint">${a.stores.length} 家门店 · 点击展开 ›</div>
+          <div class="hint">点击展开 ${c.stores.length} 家门店 ›</div>
         </div>
-      `;
-    }).join('') + '</div>';
+      `).join('') + '</div>';
     $content.innerHTML = html;
     $content.querySelectorAll('.region-card').forEach(card => {
-      card.onclick = () => { STATE.group = card.dataset.group; STATE.store = null; refreshAll(); };
+      card.onclick = () => { STATE.city = card.dataset.prefix; STATE.store = null; refreshAll(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
     });
   }
 
-  // 二阶：门店列表
+  // 二阶：当前 city 下的门店列表
   function renderStores() {
-    const stores = DATA.agg[STATE.group].stores;
-    if (stores.length === 0) {
-      $content.innerHTML = '<div class="empty">该区域暂无门店数据</div>';
+    const cityKey = STATE.tab + '|' + STATE.city;
+    const cityObj = DATA.cities[cityKey];
+    if (!cityObj || cityObj.stores.length === 0) {
+      $content.innerHTML = '<div class="empty">该城市暂无门店数据</div>';
       return;
     }
-    const html = '<div class="store-grid">' + stores.map(s => `
+    const html = '<div class="store-grid">' + cityObj.stores.map(s => {
+      const lvl = s.passed === 0 ? 'lvl-0' : (s.passed === 1 ? 'lvl-1' : 'lvl-2');
+      const lvlLabel = s.passed === 0 ? '全员未通过' : (s.passed === 1 ? '1 人通过' : `${s.passed} 人通过`);
+      return `
       <div class="store-card" data-store="${s.name.replace(/"/g, '&quot;')}">
-        <div class="store-name">${s.name}</div>
+        <div class="store-name ${lvl}" title="${lvlLabel}">${s.name}</div>
         <div class="store-stats">
           <div class="ss-cell passed"><div class="n">${s.passed}</div><div class="l">通过</div></div>
           <div class="ss-cell failed"><div class="n">${s.failed}</div><div class="l">未通过</div></div>
           <div class="ss-cell pending"><div class="n">${s.pending}</div><div class="l">待处理</div></div>
         </div>
       </div>
-    `).join('') + '</div>';
+    `;}).join('') + '</div>';
     $content.innerHTML = html;
     $content.querySelectorAll('.store-card').forEach(card => {
       card.onclick = () => { STATE.store = card.dataset.store; refreshAll(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
     });
   }
 
-  // 三阶：人员明细
+  // 三阶：当前 store 的人员明细
   function renderPeople() {
-    const store = DATA.agg[STATE.group].stores.find(s => s.name === STATE.store);
+    const cityKey = STATE.tab + '|' + STATE.city;
+    const cityObj = DATA.cities[cityKey];
+    const store = cityObj && cityObj.stores.find(s => s.name === STATE.store);
     if (!store) {
       $content.innerHTML = '<div class="empty">未找到门店数据</div>';
       return;
     }
-    // 排序：通过在前 → 未通过 → 待处理；同名按职位
     const order = { passed: 0, failed: 1, pending: 2 };
     const persons = store.persons.slice().sort((a, b) => {
       if (order[a.pass] !== order[b.pass]) return order[a.pass] - order[b.pass];
@@ -647,10 +815,14 @@ shutil.copy2(OUT, DEPLOY_INDEX)
 print("✓ HTML 生成成功：", OUT)
 print("✓ 同步到部署目录：", DEPLOY_INDEX)
 print("  大小：", len(final_html), "bytes")
-print("  区域数：", len(out_data['groups']))
+print("  Tab 数：", len(out_data['tabs']))
 total_persons = 0
-for g, v in out_data['agg'].items():
-    print(f"  {g}: 通过 {v['passed']} / 未通过 {v['failed']} / 待处理 {v['pending']} / {len(v['stores'])} 家门店")
-    for s in v['stores']:
-        total_persons += len(s['persons'])
+for tab in out_data['tabs']:
+    city_list = [c for ck, c in out_data['cities'].items() if c['tab'] == tab['id']]
+    p = sum(c['passed'] for c in city_list)
+    f = sum(c['failed'] for c in city_list)
+    n = sum(c['pending'] for c in city_list)
+    print(f"  {tab['name']}: 通过 {p} / 未通过 {f} / 待处理 {n} / {len(city_list)} 个城市")
+    for c in city_list:
+        total_persons += sum(len(s['persons']) for s in c['stores'])
 print("  人员记录总数：", total_persons)
